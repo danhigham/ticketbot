@@ -1,0 +1,7 @@
+node_modules
+.DS_Store*
+.hubot_history
+sample_ticket.json
+env.sh
+ticket_design
+manifest.yml

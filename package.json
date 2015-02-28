@@ -1,0 +1,31 @@
+{
+  "name": "ticketbot",
+  "version": "0.0.0",
+  "private": true,
+  "author": "dhigham@pivotal.io",
+  "description": "Zendesk Robot",
+  "dependencies": {
+    "hubot": "^2.11.0",
+    "hubot-diagnostics": "0.0.1",
+    "hubot-google-translate": "^0.1.0",
+    "hubot-help": "^0.1.1",
+    "hubot-heroku-keepalive": "0.0.4",
+    "hubot-maps": "0.0.1",
+    "hubot-redis-brain": "0.0.2",
+    "hubot-scripts": "^2.5.16",
+    "hubot-slack": "*",
+    "knox": "*",
+    "hubot-slack-attachment": "*",
+    "node-zendesk": "*",
+    "underscore": "*",
+    "intl": "*",
+    "handlebars": "*",
+    "handlebars-intl": "*",
+    "tempfile": "*",
+    "async": "*",
+    "slack-client": "*"
+  },
+  "engines": {
+    "node": "0.10.x"
+  }
+}

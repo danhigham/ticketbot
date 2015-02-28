@@ -1,0 +1,14 @@
+---
+applications:
+- name: ticketbot
+  memory: 512M
+  no-route: true
+  command: bin/hubot -a slack -n ticketbot
+  env:
+    HUBOT_ZENDESK_USER: xxxxxxx
+    HUBOT_ZENDESK_TOKEN: xxxxxxxx
+    HUBOT_ZENDESK_SUBDOMAIN: xxxxxxx
+    HUBOT_SLACK_TOKEN: xxxxxxx
+    S3_KEY: xxxxxxx
+    S3_SECRET: xxxxxxx
+    HUBOT_SLACK_INCOMING_WEBHOOK: xxxxxxx

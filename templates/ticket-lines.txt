@@ -1,0 +1,5 @@
+I found {{tickets.length}} tickets...
+
+{{#each tickets}}
+{{id}} :- _{{subject}}_ from *{{requester.name}}* ({{requester.email}}) @ {{formatDate created_at day="numeric" month="numeric" year="numeric"}} {{formatTime created_at hour="numeric" minute="numeric"}}
+{{/each}}

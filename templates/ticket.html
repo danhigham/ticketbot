@@ -1,0 +1,83 @@
+<html>
+<head>
+  <link rel="stylesheet" href="./css/pivotal-ui.min.css">
+  <link rel="stylesheet" href="./css/ticket.css">
+
+  <script src="./js/pivotal-ui-min.js"></script>
+</head>
+<body>
+
+  <div class="container" role="main">
+
+    <div class="row">
+      <div class="col-md-24">
+        <h1>{{subject}}</h1>
+      </div>
+    </div>
+
+    {{#each comments}}
+
+    <hr />
+
+    <div class="comment">
+
+      <div class="row">
+        <div class="col-md-6">
+
+          {{#unless public}}
+          <div class="ribbon-banner">internal comment</div>
+          {{/unless}}
+
+          {{#if author.photo}}
+          <div class="panel panel-alt bg-neutral-11 contact-panel">
+            <div class="panel-body">
+              <img src="{{author.photo.content_url}}"></img>
+              <ul>
+                <li>{{author.name}}</li>
+                <li>{{author.email}}</li>
+                <li>{{formatDate created_at day="numeric" month="numeric" year="numeric"}} {{formatTime created_at hour="numeric" minute="numeric"}}</li>
+              </ul>
+            </div>
+          </div>
+          {{/if}}
+        </div>
+
+      </div>
+
+      {{#if attachments}}
+
+      <div class="row">
+        <div class="col-md-18">
+          {{{html_body}}}
+        </div>
+        <div class="col-md-6">
+          <div class="panel panel-clickable-alt bg-neutral-11">
+            <div class="panel-body">
+              <ul class="attachments list-group">
+                {{#each attachments}}
+                <li><a target="_new" href="{{signed_url}}">{{file_name}}</a></li>
+                {{/each}}
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {{else}}
+
+      <div class="row">
+        <div class="col-md-24">
+          {{{html_body}}}
+        </div>
+      </div>
+
+      {{/if}}
+
+    </div>
+
+    {{/each}}
+
+  </div>
+
+</body>
+</html>
