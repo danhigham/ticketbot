@@ -10,15 +10,17 @@
 #   hubot views - list all views available to ticketbot
 #   hubot view (open|closed|hold|solved) <view name or id> - list all tickets with a view, optionally filtered by state
 #   hubot ticket <number> - returns a ticket (hosted on S3).
-#   hubot add_note <number> <comment> - add an internal note to a ticket
+#   hubot add_note <number> - add an internal note to a ticket
 
 # TODO
 # ====
 #
+# 1 - Silently upload tickets when comments are added
 # 2 - Show view with filters
 # 3 - Ticket Search
 # 4 - Look for mentions of @ticketbot and send a loving message
 # 5 - Monitor ticket updates and broadcast to #cf-support
+
 
 global.Intl = require('intl') if !global.Intl?
 
@@ -63,6 +65,16 @@ s3_client = knox.createClient
 hb_intl.registerWith hb
 intl_data =
   locales: "en-US"
+
+# set up services
+services_json = process.env.VCAP_SERVICES
+
+if services_json?
+  vcap_services = JSON.parse(services_json)
+  creds = vcap_services.rediscloud[0].credentials
+
+  process.env.REDIS_URL= "redis://ticketbot:#{creds.password}@#{creds.hostname}:#{creds.port}/ticketbot"
+  console.log process.env.REDIS_URL
 
 String::truncate = (n) ->
   @substr(0, n - 1) + ((if @length > n then "&hellip;" else ""))
@@ -133,6 +145,95 @@ delete_message = (client, channel, ts) ->
 
   client._apiCall "chat.delete", params
 
+take_note = (robot, msg, note_callback) ->
+
+  msg.reply "Okay, i'm listening... send me the word 'end' to finish or 'cancel' to cancel!"
+
+  username = msg.message.user.name
+
+  note =
+    msg: []
+    timestamp: new Date()
+    callback: note_callback
+
+  robot.brain.set "#{username}_note", note
+
+upload_ticket = (ticket_id, upload_callback) -> # callback = (err, ticket)
+
+  client.tickets.show ticket_id, (err, req, ticket) ->
+
+    return upload_callback("I couldn't find ticket #{ticket_id}", null) if !ticket?
+
+    expires = new Date()
+    expires.setHours expires.getHours() + 48
+
+    jobs = []
+    comment_jobs = []
+
+    # get comments for the ticket
+    jobs.push (callback) ->
+      client.tickets.getComments ticket_id, (err, req, comments) ->
+        return callback(err) if err
+        ticket.comments = comments[0].comments
+        callback null, ticket.comments
+
+    jobs.push (callback) ->
+      client.users.show ticket.requester_id, (err, req, r) ->
+        return callback err if err
+        ticket.requester = r
+        return callback(null, ticket)
+
+    jobs.push (callback) ->
+      client.users.show ticket.submitter_id, (err, req, r) ->
+        return callback err if err
+        ticket.submitter = r
+        return callback(null, ticket)
+
+    jobs.push (callback) ->
+      client.users.show ticket.assignee_id, (err, req, r) ->
+        return callback err if err
+        ticket.assignee = r
+        return callback(null, ticket)
+
+    # run all pending jobs
+    async.series jobs, (err, jobs_results) ->
+
+      # if an error occurs at all
+      if err
+        msg.send "ERROR : #{err}"
+        return
+
+      _.each ticket.comments, (comment) ->
+        comment.ticket_id = ticket.id
+
+      async.map ticket.comments, set_comment_author, (err, attachments) ->
+
+        attachments = _.flatten(attachments)
+
+        async.each attachments, upload_attachment, (err) ->
+
+          # if an error occurs at all
+          if err
+            msg.send "ERROR : #{err}"
+            return
+
+          html = templates.templates["ticket.html"] ticket,
+            data:
+              intl: intl_data
+
+          req = s3_client.put "ticket_#{ticket_id}.html",
+            'Content-Length': Buffer.byteLength(html)
+            'Content-Type': 'text/html'
+
+          req.on 'response', (res) ->
+
+            return upload_callback("Upload failed", null) if res.statusCode <> 200
+
+            console.log 'saved to %s', req.url
+            return upload_callback(null, ticket)
+
+          req.end html
+
 
 wait = (client, bot, channel, text, callback) ->
 
@@ -174,10 +275,40 @@ module.exports = (robot) ->
   slack = robot.adapter.client
   bot = slack.getUserByName 'ticketbot' if slack?
 
-  robot.respond /add_note ([\d]+) (.+)$/i, (msg) ->
+  robot_re = new RegExp "^\@?#{robot.name}", "i"
+
+  robot.hear /.+/i, (msg) ->
+
+    return if msg.message.text.match robot_re
+
+    username = msg.message.user.name
+    note = robot.brain.get "#{username}_note"
+
+    if note?
+      note.msg.push msg.message.text
+      robot.brain.set "#{username}_note", note
+
+  robot.respond /(END|CANCEL)$/i, (msg) ->
+
+    cancelled = msg.match[1].toLowerCase() == "cancel"
+
+    username = msg.message.user.name
+    note = robot.brain.get "#{username}_note"
+
+    if note?
+      robot.brain.set "#{username}_note", null
+      note.callback note.msg.join("<br>\n"), cancelled
+
+  robot.respond /take_note$/i, (msg) ->
+    take_note robot, msg, (note, cancelled) ->
+
+      unless cancelled
+        console.log "output: \n"
+        console.log note
+
+  robot.respond /add_note ([\d]+)$/i, (msg) ->
 
     ticket_id = msg.match[1]
-    comment_body = msg.match[2]
     username = msg.message.user.name
 
     channel = slack.getChannelGroupOrDMByName msg.envelope.message.room
@@ -185,33 +316,39 @@ module.exports = (robot) ->
     wait_interval = null
     wait_message_ts = null
 
-    wait slack, bot, channel, "Please wait ", (interval, ts) ->
-      wait_interval = interval
-      wait_message_ts = ts
+    take_note robot, msg, (note, cancelled) ->
 
-    client.tickets.show ticket_id, (err, req, ticket) ->
-
-      if !ticket?
-        clearInterval wait_interval
-        update_message slack, channel, wait_message_ts, "I couldn't find ticket #{ticket_id}"
+      if cancelled
+        msg.reply "Comment cancelled!"
         return
 
-      markup = templates.templates["comment.html"]
-        author: msg.message.user
-        content: comment_body
-      , data:
-          intl: intl_data
+      wait slack, bot, channel, "Please wait ", (interval, ts) ->
+        wait_interval = interval
+        wait_message_ts = ts
 
-      update =
-        ticket:
-          comment:
-            author_id: zendesk_bot_user
-            html_body: markup
-            public: false
+      client.tickets.show ticket_id, (err, req, ticket) ->
 
-      client.tickets.update ticket.id, update, (err, req, ticket) ->
-        clearInterval wait_interval
-        update_message slack, channel, wait_message_ts, "Comment posted! to #{ticket_id}"
+        if !ticket?
+          clearInterval wait_interval
+          update_message slack, channel, wait_message_ts, "I couldn't find ticket #{ticket_id}"
+          return
+
+        markup = templates.templates["comment.html"]
+          author: msg.message.user
+          content: note
+        , data:
+            intl: intl_data
+
+        update =
+          ticket:
+            comment:
+              author_id: zendesk_bot_user
+              html_body: markup
+              public: false
+
+        client.tickets.update ticket.id, update, (err, req, ticket) ->
+          clearInterval wait_interval
+          update_message slack, channel, wait_message_ts, "Comment posted to #{ticket_id}"
 
   robot.respond /view (open|pending|hold|solved)?\s?(.+)$/i, (msg) ->
 
