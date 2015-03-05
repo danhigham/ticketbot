@@ -15,7 +15,6 @@
 # TODO
 # ====
 #
-# 1 - Silently upload tickets when comments are added
 # 2 - Show view with filters
 # 3 - Ticket Search
 # 4 - Look for mentions of @ticketbot and send a loving message
@@ -212,10 +211,7 @@ upload_ticket = (ticket_id, upload_callback) -> # callback = (err, ticket)
 
         async.each attachments, upload_attachment, (err) ->
 
-          # if an error occurs at all
-          if err
-            msg.send "ERROR : #{err}"
-            return
+          return msg.send "ERROR : #{err}" if err?
 
           html = templates.templates["ticket.html"] ticket,
             data:
@@ -227,7 +223,7 @@ upload_ticket = (ticket_id, upload_callback) -> # callback = (err, ticket)
 
           req.on 'response', (res) ->
 
-            return upload_callback("Upload failed", null) if res.statusCode <> 200
+            return upload_callback("Upload failed", null) if res.statusCode != 200
 
             console.log 'saved to %s', req.url
             return upload_callback(null, ticket)
@@ -349,6 +345,10 @@ module.exports = (robot) ->
         client.tickets.update ticket.id, update, (err, req, ticket) ->
           clearInterval wait_interval
           update_message slack, channel, wait_message_ts, "Comment posted to #{ticket_id}"
+
+          upload_ticket ticket_id, (err, ticket) ->
+            console.log err if err?
+            console.log "Updated ticket #{ticket_id}"
 
   robot.respond /view (open|pending|hold|solved)?\s?(.+)$/i, (msg) ->
 
@@ -479,103 +479,28 @@ module.exports = (robot) ->
       wait_interval = interval
       wait_message_ts = ts
 
-    client.tickets.show ticket_id, (err, req, ticket) ->
+    upload_ticket ticket_id, (err, ticket) ->
 
-      if !ticket?
-        clearInterval wait_interval
-        update_message slack, channel, wait_message_ts, "I couldn't find ticket #{ticket_id}"
-        return
+      return msg.send err if err?
 
-      expires = new Date()
-      expires.setHours expires.getHours() + 48
+      ticket_url = s3_client.signedUrl("ticket_#{ticket_id}.html", expires);
 
-      jobs = []
-      comment_jobs = []
+      robot.emit 'slack.attachment',
+        message: msg.message
+        content:
+          color: "#7CD197"
+          pretext: "Ticket requested by @#{username} "
+          text: "<#{ticket_url}|#{ticket.subject}> "
+          fields: [{
+            title: "Description"
+            value: ticket.description.truncate(200)
+          },{
+            title: "Created at"
+            value: ticket.created_at
+          },{
+            title: "Updated at"
+            value: ticket.updated_at
+          }]
 
-      # get comments for the ticket
-      jobs.push (callback) ->
-        client.tickets.getComments ticket_id, (err, req, comments) ->
-          return callback(err) if err
-          ticket.comments = comments[0].comments
-          callback null, ticket.comments
-
-      jobs.push (callback) ->
-        client.users.show ticket.requester_id, (err, req, r) ->
-          return callback err if err
-          ticket.requester = r
-          return callback(null, ticket)
-
-      jobs.push (callback) ->
-        client.users.show ticket.submitter_id, (err, req, r) ->
-          return callback err if err
-          ticket.submitter = r
-          return callback(null, ticket)
-
-      jobs.push (callback) ->
-        client.users.show ticket.assignee_id, (err, req, r) ->
-          return callback err if err
-          ticket.assignee = r
-          return callback(null, ticket)
-
-      # run all pending jobs
-
-      async.series jobs, (err, jobs_results) ->
-
-        # if an error occurs at all
-        if err
-          msg.send "ERROR : #{err}"
-          return
-
-        _.each ticket.comments, (comment) ->
-          comment.ticket_id = ticket.id
-
-        async.map ticket.comments, set_comment_author, (err, attachments) ->
-
-          attachments = _.flatten(attachments)
-
-          async.each attachments, upload_attachment, (err) ->
-
-            # if an error occurs at all
-            if err
-              msg.send "ERROR : #{err}"
-              return
-
-            html = templates.templates["ticket.html"] ticket,
-              data:
-                intl: intl_data
-
-            req = s3_client.put "ticket_#{ticket_id}.html",
-              'Content-Length': Buffer.byteLength(html)
-              'Content-Type': 'text/html'
-
-            req.on 'response', (res) ->
-
-              if 200 == res.statusCode
-
-                console.log 'saved to %s', req.url
-
-                ticket_url = s3_client.signedUrl("ticket_#{ticket_id}.html", expires);
-
-                robot.emit 'slack.attachment',
-                  message: msg.message
-                  content:
-                    color: "#7CD197"
-                    pretext: "Ticket requested by @#{username} "
-                    text: "<#{ticket_url}|#{ticket.subject}> "
-                    fields: [{
-                      title: "Description"
-                      value: ticket.description.truncate(200)
-                    },{
-                      title: "Created at"
-                      value: ticket.created_at
-                    },{
-                      title: "Updated at"
-                      value: ticket.updated_at
-                    }]
-
-              clearInterval wait_interval
-              delete_message slack, channel, wait_message_ts
-
-              return
-
-            req.end html
+      clearInterval wait_interval
+      delete_message slack, channel, wait_message_ts
